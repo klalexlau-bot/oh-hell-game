@@ -1,1 +1,416 @@
-← Paste the full Oh Hell! game component here.
+import React, { useState, useEffect, useRef } from 'react';
+
+const SUITS = ['♠', '♥', '♦', '♣'];
+const VALUES = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+const VAL = Object.fromEntries(VALUES.map((v, i) => [v, i + 2]));
+const isRed = s => s === '♥' || s === '♦';
+const NUM_P = 4;
+const NAMES = ['You', 'Alice', 'Bob', 'Carol'];
+const MAX_ROUND = Math.floor(52 / NUM_P);
+
+function makeDeck() {
+  return SUITS.flatMap(s => VALUES.map(v => ({ s, v, id: `${v}${s}` })));
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function getTrickWinner(trick, trump) {
+  let best = 0;
+  for (let i = 1; i < trick.length; i++) {
+    const b = trick[best].card, c = trick[i].card;
+    const bT = b.s === trump, cT = c.s === trump;
+    if (cT && !bT) { best = i; continue; }
+    if (!cT && bT) continue;
+    if (c.s === b.s && VAL[c.v] > VAL[b.v]) best = i;
+  }
+  return trick[best].player;
+}
+
+function aiBid(hand, trump, round) {
+  let est = 0;
+  for (const c of hand) {
+    if (c.s === trump) {
+      est += VAL[c.v] >= 12 ? 1 : VAL[c.v] >= 9 ? 0.5 : 0.25;
+    } else {
+      if (VAL[c.v] === 14) est += 0.7;
+      else if (VAL[c.v] === 13) est += 0.4;
+      else if (VAL[c.v] === 12) est += 0.2;
+    }
+  }
+  return Math.max(0, Math.min(Math.round(est + (Math.random() - 0.5) * 0.6), round));
+}
+
+function aiChooseCard(hand, trick, trump, bid, taken) {
+  const lead = trick.length > 0 ? trick[0].card.s : null;
+  const followable = lead ? hand.filter(c => c.s === lead) : [];
+  const playable = followable.length > 0 ? followable : hand;
+  const sorted = [...playable].sort((a, b) => VAL[a.v] - VAL[b.v]);
+  return taken < bid ? sorted[sorted.length - 1] : sorted[0];
+}
+
+function dealRound(round, dealer, scores) {
+  const deck = shuffle(makeDeck());
+  const hands = Array.from({ length: NUM_P }, (_, i) => deck.slice(i * round, (i + 1) * round));
+  const trumpCard = deck[NUM_P * round] || null;
+  const trump = trumpCard ? trumpCard.s : null;
+  const firstP = (dealer + 1) % NUM_P;
+  return {
+    phase: 'bidding', round, dealer, scores: [...scores],
+    hands, trump, trumpCard,
+    bids: Array(NUM_P).fill(null),
+    taken: Array(NUM_P).fill(0),
+    trick: [], leader: firstP, current: firstP,
+    lastWinner: null, scoreChanges: null,
+  };
+}
+
+function doPlayCard(state, player, card) {
+  const newHands = state.hands.map((h, i) =>
+    i === player ? h.filter(c => c.id !== card.id) : h
+  );
+  const newTrick = [...state.trick, { player, card }];
+  if (newTrick.length < NUM_P) {
+    return { ...state, hands: newHands, trick: newTrick, current: (player + 1) % NUM_P };
+  }
+  const winner = getTrickWinner(newTrick, state.trump);
+  const newTaken = [...state.taken];
+  newTaken[winner]++;
+  return { ...state, hands: newHands, trick: newTrick, taken: newTaken, lastWinner: winner, phase: 'trick_end' };
+}
+
+export default function OhHellGame() {
+  const [gs, setGs] = useState(null);
+  const [sel, setSel] = useState(null);
+  const timerRef = useRef(null);
+
+  const clearT = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+  };
+
+  useEffect(() => {
+    if (!gs) return;
+    clearT();
+
+    if (gs.phase === 'bidding' && gs.current !== 0) {
+      timerRef.current = setTimeout(() => {
+        setGs(prev => {
+          if (!prev || prev.phase !== 'bidding' || prev.current === 0) return prev;
+          const bid = aiBid(prev.hands[prev.current], prev.trump, prev.round);
+          const newBids = [...prev.bids];
+          newBids[prev.current] = bid;
+          const next = (prev.current + 1) % NUM_P;
+          const done = newBids.every(b => b !== null);
+          return { ...prev, bids: newBids, current: done ? prev.leader : next, phase: done ? 'playing' : 'bidding' };
+        });
+      }, 650);
+    }
+
+    if (gs.phase === 'playing' && gs.current !== 0) {
+      timerRef.current = setTimeout(() => {
+        setGs(prev => {
+          if (!prev || prev.phase !== 'playing' || prev.current === 0) return prev;
+          const card = aiChooseCard(
+            prev.hands[prev.current], prev.trick, prev.trump,
+            prev.bids[prev.current], prev.taken[prev.current]
+          );
+          return doPlayCard(prev, prev.current, card);
+        });
+      }, 850);
+    }
+
+    if (gs.phase === 'trick_end') {
+      timerRef.current = setTimeout(() => {
+        setGs(prev => {
+          if (!prev || prev.phase !== 'trick_end') return prev;
+          const total = prev.taken.reduce((a, b) => a + b, 0);
+          if (total >= prev.round) {
+            const changes = prev.bids.map((bid, i) => {
+              const made = prev.taken[i] === bid;
+              return made ? 10 + bid : -Math.abs(prev.taken[i] - bid) * 5;
+            });
+            const newScores = prev.scores.map((s, i) => s + changes[i]);
+            const nextPhase = prev.round >= MAX_ROUND ? 'game_over' : 'round_end';
+            return { ...prev, scores: newScores, scoreChanges: changes, phase: nextPhase };
+          }
+          return { ...prev, trick: [], leader: prev.lastWinner, current: prev.lastWinner, phase: 'playing' };
+        });
+      }, 1400);
+    }
+
+    return clearT;
+  }, [gs?.phase, gs?.current]);
+
+  function humanBid(bid) {
+    if (!gs || gs.phase !== 'bidding' || gs.current !== 0) return;
+    setGs(prev => {
+      const newBids = [...prev.bids];
+      newBids[0] = bid;
+      const next = 1;
+      const done = newBids.every(b => b !== null);
+      return { ...prev, bids: newBids, current: done ? prev.leader : next, phase: done ? 'playing' : 'bidding' };
+    });
+  }
+
+  function humanPlay(card) {
+    if (!gs || gs.phase !== 'playing' || gs.current !== 0) return;
+    const lead = gs.trick.length > 0 ? gs.trick[0].card.s : null;
+    if (lead) {
+      const hasLead = gs.hands[0].some(c => c.s === lead);
+      if (hasLead && card.s !== lead) return;
+    }
+    setSel(null);
+    setGs(prev => doPlayCard(prev, 0, card));
+  }
+
+  function startGame() {
+    setSel(null);
+    setGs(dealRound(1, 0, Array(NUM_P).fill(0)));
+  }
+
+  function nextRound() {
+    setSel(null);
+    setGs(prev => dealRound(prev.round + 1, (prev.dealer + 1) % NUM_P, prev.scores));
+  }
+
+  const sc = s => isRed(s) ? 'text-red-500' : 'text-gray-800';
+
+  if (!gs) {
+    return (
+      <div className="min-h-screen bg-green-900 flex items-center justify-center p-4">
+        <div className="text-center max-w-sm w-full">
+          <div className="text-6xl mb-2">🃏</div>
+          <h1 className="text-5xl font-bold text-yellow-300 mb-2">Oh Hell!</h1>
+          <p className="text-green-300 mb-6">Trick-taking card game · 4 players · 13 rounds</p>
+          <div className="bg-green-800 rounded-2xl p-5 mb-8 text-left text-green-100 text-sm space-y-2">
+            <p className="font-bold text-white text-base mb-1">How to play</p>
+            <p>📦 Deal grows from 1 card up to 13 each round</p>
+            <p>🎯 Bid exactly how many tricks you will win</p>
+            <p>♠ Must follow suit if possible; trump beats all</p>
+            <p>✅ Make your bid: <span className="text-green-300 font-bold">+10 + bid</span> points</p>
+            <p>❌ Miss your bid: <span className="text-red-400 font-bold">−5 per trick off</span></p>
+          </div>
+          <button
+            onClick={startGame}
+            className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold py-4 px-12 rounded-2xl text-2xl shadow-xl transition-colors w-full"
+          >
+            Deal Cards!
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const { phase, round, trump, trumpCard, bids, taken, trick, hands, scores, current, leader, lastWinner, scoreChanges } = gs;
+
+  if (phase === 'game_over') {
+    const ranked = NAMES.map((n, i) => ({ n, s: scores[i] })).sort((a, b) => b.s - a.s);
+    return (
+      <div className="min-h-screen bg-green-900 flex items-center justify-center p-4">
+        <div className="text-center max-w-sm w-full">
+          <div className="text-5xl mb-2">🏆</div>
+          <h1 className="text-4xl font-bold text-white mb-1">Game Over!</h1>
+          <p className="text-yellow-300 text-xl font-bold mb-6">{ranked[0].n} wins!</p>
+          <div className="bg-green-800 rounded-2xl overflow-hidden mb-6">
+            {ranked.map((p, i) => (
+              <div key={p.n} className={`flex justify-between px-5 py-3 ${i === 0 ? 'bg-yellow-400 text-gray-900 font-bold text-lg' : 'text-white border-t border-green-700'}`}>
+                <span>{i + 1}. {p.n}</span>
+                <span>{p.s} pts</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={startGame} className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold py-3 px-8 rounded-xl text-xl w-full transition-colors">
+            Play Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'round_end') {
+    return (
+      <div className="min-h-screen bg-green-900 flex items-center justify-center p-4">
+        <div className="text-center max-w-sm w-full">
+          <h2 className="text-3xl font-bold text-white mb-1">Round {round} Done!</h2>
+          <p className="text-green-400 text-sm mb-5">Round {round + 1} next — {round + 1} card{round + 1 !== 1 ? 's' : ''} each</p>
+          <div className="bg-green-800 rounded-2xl overflow-hidden mb-6">
+            {NAMES.map((name, i) => {
+              const made = taken[i] === bids[i];
+              const ch = scoreChanges ? scoreChanges[i] : 0;
+              return (
+                <div key={i} className="flex items-center gap-2 px-4 py-3 text-white border-t border-green-700 first:border-0">
+                  <span className="font-medium w-14">{name}</span>
+                  <span className="text-green-400 text-xs flex-1">{taken[i]} of {bids[i]} bid</span>
+                  <span className={`font-bold w-12 text-right ${made ? 'text-green-400' : 'text-red-400'}`}>
+                    {ch > 0 ? '+' : ''}{ch}
+                  </span>
+                  <span className="text-yellow-300 font-bold w-14 text-right">{scores[i]} pt</span>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={nextRound} className="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold py-3 px-8 rounded-xl text-xl w-full transition-colors">
+            Next Round →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const myHand = hands[0] || [];
+  const isMyBidTurn = phase === 'bidding' && current === 0;
+  const isMyPlayTurn = phase === 'playing' && current === 0;
+  const leadSuit = trick.length > 0 ? trick[0].card.s : null;
+
+  const canPlay = (card) => {
+    if (!isMyPlayTurn) return false;
+    if (!leadSuit) return true;
+    return !myHand.some(c => c.s === leadSuit) || card.s === leadSuit;
+  };
+
+  const statusMsg =
+    phase === 'trick_end' ? `${NAMES[lastWinner]} wins the trick!` :
+    phase === 'bidding' ? (isMyBidTurn ? 'Your bid — how many tricks will you win?' : `${NAMES[current]} is bidding...`) :
+    isMyPlayTurn ? (trick.length === 0 ? 'Your lead — play any card' : 'Your turn to play') :
+    `${NAMES[current]} is playing...`;
+
+  return (
+    <div className="min-h-screen bg-green-800 flex flex-col">
+      {/* Top bar */}
+      <div className="bg-green-900 px-3 py-2 flex items-center gap-2">
+        <span className="text-yellow-300 font-bold text-sm whitespace-nowrap">Oh Hell!</span>
+        <div className="flex gap-1 flex-1 justify-center">
+          {NAMES.map((name, i) => (
+            <div
+              key={i}
+              className={`text-center px-1 py-1 rounded-lg text-xs flex-1 min-w-0 transition-colors
+                ${i === current && (phase === 'bidding' || phase === 'playing')
+                  ? 'bg-yellow-400 text-gray-900'
+                  : 'bg-green-800 text-white'}`}
+            >
+              <div className="font-bold truncate">{name}</div>
+              <div>{scores[i]} pt</div>
+              {bids[i] !== null && <div className="opacity-75">{taken[i]}/{bids[i]}</div>}
+            </div>
+          ))}
+        </div>
+        <div className="text-right whitespace-nowrap">
+          <div className="text-green-400 text-xs">Rd {round}/{MAX_ROUND}</div>
+          {trumpCard && (
+            <div className={`bg-white rounded px-1 text-xs font-bold leading-tight ${sc(trump)}`}>
+              {trumpCard.v}{trumpCard.s}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* AI hands (face down) */}
+      <div className="flex justify-around px-2 py-2">
+        {[1, 2, 3].map(i => (
+          <div key={i} className="text-center">
+            <div className={`text-xs mb-1 ${i === current && phase !== 'trick_end' ? 'text-yellow-300 font-bold' : 'text-green-400'}`}>
+              {NAMES[i]}{bids[i] !== null ? ` (${taken[i]}/${bids[i]})` : ''}
+            </div>
+            <div className="flex gap-0.5 justify-center">
+              {Array.from({ length: (hands[i] || []).length }, (_, j) => (
+                <div key={j} className="w-8 h-11 bg-blue-900 rounded border border-blue-700" />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Status bar */}
+      <div className={`mx-3 px-3 py-2 rounded-lg text-center text-sm font-medium transition-colors
+        ${phase === 'trick_end' ? 'bg-yellow-500 text-gray-900' :
+          isMyBidTurn || isMyPlayTurn ? 'bg-blue-600 text-white' :
+          'bg-green-700 text-green-200'}`}>
+        {statusMsg}
+      </div>
+
+      {/* Trick area */}
+      <div className="flex-1 flex items-center justify-center py-2 px-4">
+        {trick.length > 0 ? (
+          <div className="flex gap-3 flex-wrap justify-center items-end">
+            {trick.map(({ player, card }) => (
+              <div key={player} className="text-center">
+                <div className={`w-14 h-20 bg-white rounded-xl flex flex-col items-center justify-center font-bold shadow-lg
+                  ${player === lastWinner && phase === 'trick_end' ? 'ring-4 ring-yellow-400' : 'ring-1 ring-gray-200'}
+                  ${sc(card.s)}`}>
+                  <div className="text-sm">{card.v}</div>
+                  <div className="text-2xl leading-none">{card.s}</div>
+                </div>
+                <div className="text-xs text-green-300 mt-1">{NAMES[player]}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-green-600 text-sm italic">
+            {phase === 'playing'
+              ? (current === 0 ? 'Your lead!' : `Waiting for ${NAMES[leader]}...`)
+              : ''}
+          </div>
+        )}
+      </div>
+
+      {/* Bid buttons */}
+      {isMyBidTurn && (
+        <div className="px-4 mb-2">
+          <p className="text-green-300 text-xs text-center mb-2">Choose your bid (0 – {round})</p>
+          <div className="flex gap-2 justify-center flex-wrap">
+            {Array.from({ length: round + 1 }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => humanBid(i)}
+                className="bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-gray-900 font-bold w-12 h-12 rounded-xl text-lg shadow transition-all"
+              >
+                {i}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Human hand */}
+      <div className="px-2 pb-4">
+        <div className="flex justify-between text-xs text-green-400 mb-1 px-1">
+          <span>Your hand</span>
+          <span>{bids[0] !== null ? `Bid ${bids[0]} · Won ${taken[0]}` : 'Waiting to bid'}</span>
+        </div>
+        <div className="flex gap-1 justify-center flex-wrap">
+          {myHand.map(card => {
+            const playable = canPlay(card);
+            const selected = sel === card.id;
+            return (
+              <div
+                key={card.id}
+                onClick={() => {
+                  if (!isMyPlayTurn || !playable) return;
+                  if (selected) { humanPlay(card); }
+                  else { setSel(card.id); }
+                }}
+                className={`w-14 h-20 bg-white rounded-xl flex flex-col items-center justify-center font-bold shadow cursor-pointer
+                  transition-all duration-150
+                  ${selected ? 'ring-4 ring-blue-500 -translate-y-4 shadow-xl' : 'ring-1 ring-gray-200'}
+                  ${!playable ? 'opacity-30' : 'hover:-translate-y-2'}
+                  ${sc(card.s)}`}
+              >
+                <div className="text-sm">{card.v}</div>
+                <div className="text-2xl leading-none">{card.s}</div>
+              </div>
+            );
+          })}
+        </div>
+        {sel && isMyPlayTurn && (
+          <p className="text-center text-xs text-yellow-300 mt-1 animate-pulse">Tap again to play</p>
+        )}
+      </div>
+    </div>
+  );
+}
