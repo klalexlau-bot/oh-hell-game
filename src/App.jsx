@@ -55,6 +55,13 @@ function aiChooseCard(hand, trick, trump, bid, taken) {
   return taken < bid ? sorted[sorted.length - 1] : sorted[0];
 }
 
+// Returns the one bid value that would make total === round, or null if out of range
+function getForbiddenBid(bids, round) {
+  const sum = bids.reduce((a, b) => a + (b ?? 0), 0);
+  const forbidden = round - sum;
+  return forbidden >= 0 && forbidden <= round ? forbidden : null;
+}
+
 function dealRound(round, dealer, scores) {
   const deck = shuffle(makeDeck());
   const hands = Array.from({ length: NUM_P }, (_, i) => deck.slice(i * round, (i + 1) * round));
@@ -102,7 +109,16 @@ export default function OhHellGame() {
       timerRef.current = setTimeout(() => {
         setGs(prev => {
           if (!prev || prev.phase !== 'bidding' || prev.current === 0) return prev;
-          const bid = aiBid(prev.hands[prev.current], prev.trump, prev.round);
+          const isLastBidder = prev.current === prev.dealer;
+          let bid = aiBid(prev.hands[prev.current], prev.trump, prev.round);
+          // Enforce: last bidder cannot make total === round
+          if (isLastBidder) {
+            const forbidden = getForbiddenBid(prev.bids, prev.round);
+            if (forbidden !== null && bid === forbidden) {
+              if (forbidden + 1 <= prev.round) bid = forbidden + 1;
+              else bid = forbidden - 1;
+            }
+          }
           const newBids = [...prev.bids];
           newBids[prev.current] = bid;
           const next = (prev.current + 1) % NUM_P;
@@ -131,9 +147,12 @@ export default function OhHellGame() {
           if (!prev || prev.phase !== 'trick_end') return prev;
           const total = prev.taken.reduce((a, b) => a + b, 0);
           if (total >= prev.round) {
+            // NEW SCORING: match = 10 + bid², miss = -(10 + delta²)
             const changes = prev.bids.map((bid, i) => {
-              const made = prev.taken[i] === bid;
-              return made ? 10 + bid : -Math.abs(prev.taken[i] - bid) * 5;
+              const delta = Math.abs(prev.taken[i] - bid);
+              return delta === 0
+                ? 10 + bid * bid
+                : -(10 + delta * delta);
             });
             const newScores = prev.scores.map((s, i) => s + changes[i]);
             const nextPhase = prev.round >= MAX_ROUND ? 'game_over' : 'round_end';
@@ -149,6 +168,11 @@ export default function OhHellGame() {
 
   function humanBid(bid) {
     if (!gs || gs.phase !== 'bidding' || gs.current !== 0) return;
+    // Human is last bidder when dealer === 0; enforce forbidden bid
+    if (gs.dealer === 0) {
+      const forbidden = getForbiddenBid(gs.bids, gs.round);
+      if (forbidden !== null && bid === forbidden) return;
+    }
     setGs(prev => {
       const newBids = [...prev.bids];
       newBids[0] = bid;
@@ -193,8 +217,9 @@ export default function OhHellGame() {
             <p>📦 Deal grows from 1 card up to 13 each round</p>
             <p>🎯 Bid exactly how many tricks you will win</p>
             <p>♠ Must follow suit if possible; trump beats all</p>
-            <p>✅ Make your bid: <span className="text-green-300 font-bold">+10 + bid</span> points</p>
-            <p>❌ Miss your bid: <span className="text-red-400 font-bold">−5 per trick off</span></p>
+            <p>✅ Make your bid: <span className="text-green-300 font-bold">+10 + bid²</span> pts (bid 2 = 14 pts)</p>
+            <p>❌ Miss your bid: <span className="text-red-400 font-bold">−(10 + delta²)</span> pts</p>
+            <p>🚫 Total bids cannot equal the number of cards dealt</p>
           </div>
           <button
             onClick={startGame}
@@ -207,7 +232,7 @@ export default function OhHellGame() {
     );
   }
 
-  const { phase, round, trump, trumpCard, bids, taken, trick, hands, scores, current, leader, lastWinner, scoreChanges } = gs;
+  const { phase, round, trump, trumpCard, bids, taken, trick, hands, scores, current, leader, lastWinner, scoreChanges, dealer } = gs;
 
   if (phase === 'game_over') {
     const ranked = NAMES.map((n, i) => ({ n, s: scores[i] })).sort((a, b) => b.s - a.s);
@@ -267,6 +292,11 @@ export default function OhHellGame() {
   const isMyBidTurn = phase === 'bidding' && current === 0;
   const isMyPlayTurn = phase === 'playing' && current === 0;
   const leadSuit = trick.length > 0 ? trick[0].card.s : null;
+
+  // Human is last bidder when dealer === 0; calculate their forbidden bid
+  const humanForbiddenBid = (isMyBidTurn && dealer === 0)
+    ? getForbiddenBid(bids, round)
+    : null;
 
   const canPlay = (card) => {
     if (!isMyPlayTurn) return false;
@@ -362,17 +392,29 @@ export default function OhHellGame() {
       {/* Bid buttons */}
       {isMyBidTurn && (
         <div className="px-4 mb-2">
-          <p className="text-green-300 text-xs text-center mb-2">Choose your bid (0 – {round})</p>
+          <p className="text-green-300 text-xs text-center mb-2">
+            Choose your bid (0–{round})
+            {humanForbiddenBid !== null && (
+              <span className="text-red-400 ml-1">· cannot bid {humanForbiddenBid}</span>
+            )}
+          </p>
           <div className="flex gap-2 justify-center flex-wrap">
-            {Array.from({ length: round + 1 }, (_, i) => (
-              <button
-                key={i}
-                onClick={() => humanBid(i)}
-                className="bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-gray-900 font-bold w-12 h-12 rounded-xl text-lg shadow transition-all"
-              >
-                {i}
-              </button>
-            ))}
+            {Array.from({ length: round + 1 }, (_, i) => {
+              const isForbidden = i === humanForbiddenBid;
+              return (
+                <button
+                  key={i}
+                  onClick={() => humanBid(i)}
+                  disabled={isForbidden}
+                  className={`font-bold w-12 h-12 rounded-xl text-lg shadow transition-all
+                    ${isForbidden
+                      ? 'bg-gray-600 text-gray-400 opacity-40 cursor-not-allowed'
+                      : 'bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-gray-900'}`}
+                >
+                  {i}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
