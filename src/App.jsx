@@ -55,7 +55,6 @@ function aiChooseCard(hand, trick, trump, bid, taken) {
   return taken < bid ? sorted[sorted.length - 1] : sorted[0];
 }
 
-// Returns the one bid value that would make total === round, or null if out of range
 function getForbiddenBid(bids, round) {
   const sum = bids.reduce((a, b) => a + (b ?? 0), 0);
   const forbidden = round - sum;
@@ -111,7 +110,6 @@ export default function OhHellGame() {
           if (!prev || prev.phase !== 'bidding' || prev.current === 0) return prev;
           const isLastBidder = prev.current === prev.dealer;
           let bid = aiBid(prev.hands[prev.current], prev.trump, prev.round);
-          // Enforce: last bidder cannot make total === round
           if (isLastBidder) {
             const forbidden = getForbiddenBid(prev.bids, prev.round);
             if (forbidden !== null && bid === forbidden) {
@@ -147,12 +145,9 @@ export default function OhHellGame() {
           if (!prev || prev.phase !== 'trick_end') return prev;
           const total = prev.taken.reduce((a, b) => a + b, 0);
           if (total >= prev.round) {
-            // NEW SCORING: match = 10 + bid², miss = -(10 + delta²)
             const changes = prev.bids.map((bid, i) => {
               const delta = Math.abs(prev.taken[i] - bid);
-              return delta === 0
-                ? 10 + bid * bid
-                : -(10 + delta * delta);
+              return delta === 0 ? 10 + bid * bid : -(10 + delta * delta);
             });
             const newScores = prev.scores.map((s, i) => s + changes[i]);
             const nextPhase = prev.round >= MAX_ROUND ? 'game_over' : 'round_end';
@@ -168,7 +163,6 @@ export default function OhHellGame() {
 
   function humanBid(bid) {
     if (!gs || gs.phase !== 'bidding' || gs.current !== 0) return;
-    // Human is last bidder when dealer === 0; enforce forbidden bid
     if (gs.dealer === 0) {
       const forbidden = getForbiddenBid(gs.bids, gs.round);
       if (forbidden !== null && bid === forbidden) return;
@@ -205,14 +199,15 @@ export default function OhHellGame() {
 
   const sc = s => isRed(s) ? 'text-red-500' : 'text-gray-800';
 
+  // ── START SCREEN ──
   if (!gs) {
     return (
-      <div className="min-h-screen bg-green-900 flex items-center justify-center p-4">
-        <div className="text-center max-w-sm w-full">
-          <div className="text-6xl mb-2">🃏</div>
-          <h1 className="text-5xl font-bold text-yellow-300 mb-2">Oh Hell!</h1>
-          <p className="text-green-300 mb-6">Trick-taking card game · 4 players · 13 rounds</p>
-          <div className="bg-green-800 rounded-2xl p-5 mb-8 text-left text-green-100 text-sm space-y-2">
+      <div className="h-screen overflow-y-auto bg-green-900 flex items-center justify-center p-4">
+        <div className="text-center max-w-sm w-full py-2">
+          <div className="text-5xl mb-1">🃏</div>
+          <h1 className="text-5xl font-bold text-yellow-300 mb-1">Oh Hell!</h1>
+          <p className="text-green-300 text-sm mb-4">Trick-taking card game · 4 players · 13 rounds</p>
+          <div className="bg-green-800 rounded-2xl p-4 mb-5 text-left text-green-100 text-sm space-y-1.5">
             <p className="font-bold text-white text-base mb-1">How to play</p>
             <p>📦 Deal grows from 1 card up to 13 each round</p>
             <p>🎯 Bid exactly how many tricks you will win</p>
@@ -234,10 +229,11 @@ export default function OhHellGame() {
 
   const { phase, round, trump, trumpCard, bids, taken, trick, hands, scores, current, leader, lastWinner, scoreChanges, dealer } = gs;
 
+  // ── GAME OVER SCREEN ──
   if (phase === 'game_over') {
     const ranked = NAMES.map((n, i) => ({ n, s: scores[i] })).sort((a, b) => b.s - a.s);
     return (
-      <div className="min-h-screen bg-green-900 flex items-center justify-center p-4">
+      <div className="h-screen overflow-hidden bg-green-900 flex items-center justify-center p-4">
         <div className="text-center max-w-sm w-full">
           <div className="text-5xl mb-2">🏆</div>
           <h1 className="text-4xl font-bold text-white mb-1">Game Over!</h1>
@@ -258,18 +254,19 @@ export default function OhHellGame() {
     );
   }
 
+  // ── ROUND END SCREEN ──
   if (phase === 'round_end') {
     return (
-      <div className="min-h-screen bg-green-900 flex items-center justify-center p-4">
+      <div className="h-screen overflow-hidden bg-green-900 flex items-center justify-center p-4">
         <div className="text-center max-w-sm w-full">
           <h2 className="text-3xl font-bold text-white mb-1">Round {round} Done!</h2>
-          <p className="text-green-400 text-sm mb-5">Round {round + 1} next — {round + 1} card{round + 1 !== 1 ? 's' : ''} each</p>
-          <div className="bg-green-800 rounded-2xl overflow-hidden mb-6">
+          <p className="text-green-400 text-sm mb-4">Round {round + 1} next — {round + 1} card{round + 1 !== 1 ? 's' : ''} each</p>
+          <div className="bg-green-800 rounded-2xl overflow-hidden mb-5">
             {NAMES.map((name, i) => {
               const made = taken[i] === bids[i];
               const ch = scoreChanges ? scoreChanges[i] : 0;
               return (
-                <div key={i} className="flex items-center gap-2 px-4 py-3 text-white border-t border-green-700 first:border-0">
+                <div key={i} className="flex items-center gap-2 px-4 py-2.5 text-white border-t border-green-700 first:border-0">
                   <span className="font-medium w-14">{name}</span>
                   <span className="text-green-400 text-xs flex-1">{taken[i]} of {bids[i]} bid</span>
                   <span className={`font-bold w-12 text-right ${made ? 'text-green-400' : 'text-red-400'}`}>
@@ -288,12 +285,12 @@ export default function OhHellGame() {
     );
   }
 
+  // ── MAIN GAME SCREEN ──
   const myHand = hands[0] || [];
   const isMyBidTurn = phase === 'bidding' && current === 0;
   const isMyPlayTurn = phase === 'playing' && current === 0;
   const leadSuit = trick.length > 0 ? trick[0].card.s : null;
 
-  // Human is last bidder when dealer === 0; calculate their forbidden bid
   const humanForbiddenBid = (isMyBidTurn && dealer === 0)
     ? getForbiddenBid(bids, round)
     : null;
@@ -306,77 +303,99 @@ export default function OhHellGame() {
 
   const statusMsg =
     phase === 'trick_end' ? `${NAMES[lastWinner]} wins the trick!` :
-    phase === 'bidding' ? (isMyBidTurn ? 'Your bid — how many tricks will you win?' : `${NAMES[current]} is bidding...`) :
+    phase === 'bidding' ? (isMyBidTurn ? 'Your bid — how many tricks?' : `${NAMES[current]} is bidding...`) :
     isMyPlayTurn ? (trick.length === 0 ? 'Your lead — play any card' : 'Your turn to play') :
     `${NAMES[current]} is playing...`;
 
+  const trumpColor = trump && isRed(trump);
+
   return (
-    <div className="min-h-screen bg-green-800 flex flex-col">
-      {/* Top bar */}
-      <div className="bg-green-900 px-3 py-2 flex items-center gap-2">
-        <span className="text-yellow-300 font-bold text-sm whitespace-nowrap">Oh Hell!</span>
-        <div className="flex gap-1 flex-1 justify-center">
+    <div className="h-screen overflow-hidden bg-green-800 flex flex-col">
+
+      {/* ── TOP BAR ── */}
+      <div className="bg-green-900 px-2 py-1.5 flex items-center gap-2 shrink-0">
+        {/* Title + round */}
+        <div className="shrink-0 text-center">
+          <div className="text-yellow-300 font-bold text-xs leading-tight">Oh Hell!</div>
+          <div className="text-green-400 text-xs leading-tight">Rd {round}/{MAX_ROUND}</div>
+        </div>
+
+        {/* Player score panels */}
+        <div className="flex gap-1 flex-1 min-w-0">
           {NAMES.map((name, i) => (
             <div
               key={i}
-              className={`text-center px-1 py-1 rounded-lg text-xs flex-1 min-w-0 transition-colors
+              className={`text-center px-0.5 py-0.5 rounded text-xs flex-1 min-w-0 transition-colors
                 ${i === current && (phase === 'bidding' || phase === 'playing')
                   ? 'bg-yellow-400 text-gray-900'
                   : 'bg-green-800 text-white'}`}
             >
               <div className="font-bold truncate">{name}</div>
-              <div>{scores[i]} pt</div>
+              <div>{scores[i]}</div>
               {bids[i] !== null && <div className="opacity-75">{taken[i]}/{bids[i]}</div>}
             </div>
           ))}
         </div>
-        <div className="text-right whitespace-nowrap">
-          <div className="text-green-400 text-xs">Rd {round}/{MAX_ROUND}</div>
-          {trumpCard && (
-            <div className={`bg-white rounded px-1 text-xs font-bold leading-tight ${sc(trump)}`}>
-              {trumpCard.v}{trumpCard.s}
-            </div>
+
+        {/* ── TRUMP BADGE — prominent ── */}
+        <div className={`shrink-0 flex flex-col items-center justify-center rounded-xl px-2 py-0.5 shadow-xl border-2
+          ${trump
+            ? trumpColor
+              ? 'bg-white border-red-500'
+              : 'bg-white border-gray-800'
+            : 'bg-green-800 border-green-700'}`}
+        >
+          <span className={`text-xs font-black uppercase tracking-tight leading-none ${trump ? 'text-gray-400' : 'text-green-600'}`}>
+            trump
+          </span>
+          {trump ? (
+            <>
+              <span className={`text-4xl font-black leading-none ${sc(trump)}`}>{trump}</span>
+              <span className={`text-xs font-bold leading-none ${sc(trump)}`}>{trumpCard?.v}</span>
+            </>
+          ) : (
+            <span className="text-green-600 text-lg leading-none">—</span>
           )}
         </div>
       </div>
 
-      {/* AI hands (face down) */}
-      <div className="flex justify-around px-2 py-2">
+      {/* ── AI HANDS (face-down, overlapping) ── */}
+      <div className="shrink-0 flex justify-around px-2 py-1.5">
         {[1, 2, 3].map(i => (
           <div key={i} className="text-center">
-            <div className={`text-xs mb-1 ${i === current && phase !== 'trick_end' ? 'text-yellow-300 font-bold' : 'text-green-400'}`}>
+            <div className={`text-xs mb-0.5 ${i === current && phase !== 'trick_end' ? 'text-yellow-300 font-bold' : 'text-green-400'}`}>
               {NAMES[i]}{bids[i] !== null ? ` (${taken[i]}/${bids[i]})` : ''}
             </div>
-            <div className="flex gap-0.5 justify-center">
+            <div className="flex justify-center">
               {Array.from({ length: (hands[i] || []).length }, (_, j) => (
-                <div key={j} className="w-8 h-11 bg-blue-900 rounded border border-blue-700" />
+                <div key={j} className={`w-6 h-9 bg-blue-900 rounded border border-blue-700 ${j > 0 ? '-ml-2' : ''}`} />
               ))}
             </div>
           </div>
         ))}
       </div>
 
-      {/* Status bar */}
-      <div className={`mx-3 px-3 py-2 rounded-lg text-center text-sm font-medium transition-colors
+      {/* ── STATUS BAR ── */}
+      <div className={`mx-2 px-3 py-1 rounded-lg text-center text-xs font-medium shrink-0 transition-colors
         ${phase === 'trick_end' ? 'bg-yellow-500 text-gray-900' :
           isMyBidTurn || isMyPlayTurn ? 'bg-blue-600 text-white' :
           'bg-green-700 text-green-200'}`}>
         {statusMsg}
       </div>
 
-      {/* Trick area */}
-      <div className="flex-1 flex items-center justify-center py-2 px-4">
+      {/* ── TRICK AREA ── */}
+      <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden px-4">
         {trick.length > 0 ? (
-          <div className="flex gap-3 flex-wrap justify-center items-end">
+          <div className="flex gap-2 flex-wrap justify-center items-end">
             {trick.map(({ player, card }) => (
               <div key={player} className="text-center">
-                <div className={`w-14 h-20 bg-white rounded-xl flex flex-col items-center justify-center font-bold shadow-lg
+                <div className={`w-12 h-16 bg-white rounded-xl flex flex-col items-center justify-center font-bold shadow-lg
                   ${player === lastWinner && phase === 'trick_end' ? 'ring-4 ring-yellow-400' : 'ring-1 ring-gray-200'}
                   ${sc(card.s)}`}>
-                  <div className="text-sm">{card.v}</div>
+                  <div className="text-xs">{card.v}</div>
                   <div className="text-2xl leading-none">{card.s}</div>
                 </div>
-                <div className="text-xs text-green-300 mt-1">{NAMES[player]}</div>
+                <div className="text-xs text-green-300 mt-0.5">{NAMES[player]}</div>
               </div>
             ))}
           </div>
@@ -389,16 +408,16 @@ export default function OhHellGame() {
         )}
       </div>
 
-      {/* Bid buttons */}
+      {/* ── BID BUTTONS ── */}
       {isMyBidTurn && (
-        <div className="px-4 mb-2">
-          <p className="text-green-300 text-xs text-center mb-2">
+        <div className="shrink-0 px-3 pb-1">
+          <p className="text-green-300 text-xs text-center mb-1">
             Choose your bid (0–{round})
             {humanForbiddenBid !== null && (
               <span className="text-red-400 ml-1">· cannot bid {humanForbiddenBid}</span>
             )}
           </p>
-          <div className="flex gap-2 justify-center flex-wrap">
+          <div className="flex gap-1 justify-center flex-wrap">
             {Array.from({ length: round + 1 }, (_, i) => {
               const isForbidden = i === humanForbiddenBid;
               return (
@@ -406,7 +425,7 @@ export default function OhHellGame() {
                   key={i}
                   onClick={() => humanBid(i)}
                   disabled={isForbidden}
-                  className={`font-bold w-12 h-12 rounded-xl text-lg shadow transition-all
+                  className={`font-bold w-9 h-9 rounded-xl text-sm shadow transition-all
                     ${isForbidden
                       ? 'bg-gray-600 text-gray-400 opacity-40 cursor-not-allowed'
                       : 'bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-gray-900'}`}
@@ -419,14 +438,14 @@ export default function OhHellGame() {
         </div>
       )}
 
-      {/* Human hand */}
-      <div className="px-2 pb-4">
+      {/* ── HUMAN HAND (overlapping cards) ── */}
+      <div className="shrink-0 px-2 pb-3 pt-1">
         <div className="flex justify-between text-xs text-green-400 mb-1 px-1">
           <span>Your hand</span>
           <span>{bids[0] !== null ? `Bid ${bids[0]} · Won ${taken[0]}` : 'Waiting to bid'}</span>
         </div>
-        <div className="flex gap-1 justify-center flex-wrap">
-          {myHand.map(card => {
+        <div className="flex justify-center items-end">
+          {myHand.map((card, idx) => {
             const playable = canPlay(card);
             const selected = sel === card.id;
             return (
@@ -434,17 +453,18 @@ export default function OhHellGame() {
                 key={card.id}
                 onClick={() => {
                   if (!isMyPlayTurn || !playable) return;
-                  if (selected) { humanPlay(card); }
-                  else { setSel(card.id); }
+                  if (selected) humanPlay(card);
+                  else setSel(card.id);
                 }}
-                className={`w-14 h-20 bg-white rounded-xl flex flex-col items-center justify-center font-bold shadow cursor-pointer
-                  transition-all duration-150
+                style={{ zIndex: selected ? 50 : idx + 1 }}
+                className={`w-12 h-16 bg-white rounded-xl flex flex-col items-center justify-center font-bold shadow cursor-pointer transition-all duration-150
+                  ${idx > 0 ? '-ml-3' : ''}
                   ${selected ? 'ring-4 ring-blue-500 -translate-y-4 shadow-xl' : 'ring-1 ring-gray-200'}
                   ${!playable ? 'opacity-30' : 'hover:-translate-y-2'}
                   ${sc(card.s)}`}
               >
-                <div className="text-sm">{card.v}</div>
-                <div className="text-2xl leading-none">{card.s}</div>
+                <div className="text-xs">{card.v}</div>
+                <div className="text-xl leading-none">{card.s}</div>
               </div>
             );
           })}
